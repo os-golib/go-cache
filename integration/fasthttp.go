@@ -88,6 +88,8 @@ func (m *HTTPCacheMiddleware[T]) Handler(next fasthttp.RequestHandler) fasthttp.
 			return
 		}
 
+		ctx.Response.Header.Set("Server", "sws")
+
 		// Generate cache key
 		key := m.keyGen(ctx)
 
@@ -145,7 +147,7 @@ func (m *HTTPCacheMiddleware[T]) WithTimeout(timeout time.Duration) *HTTPCacheMi
 
 // serveFromCache serves a cached response
 func (m *HTTPCacheMiddleware[T]) serveFromCache(ctx *fasthttp.RequestCtx, cached T) {
-	body, err := m.serializer.Serialize(cached)
+	body, err := m.serializer.Encode(cached)
 	if err != nil {
 		// If serialization fails, treat as cache miss and continue
 		m.serveMiss(ctx)
@@ -171,7 +173,6 @@ func (m *HTTPCacheMiddleware[T]) cacheResponse(ctx *fasthttp.RequestCtx, key str
 	if !m.isCacheableStatus(ctx.Response.StatusCode()) {
 		return
 	}
-
 	// Don't cache if response indicates no-cache
 	cc := ctx.Response.Header.Peek("Cache-Control")
 	if len(cc) > 0 {
@@ -182,7 +183,7 @@ func (m *HTTPCacheMiddleware[T]) cacheResponse(ctx *fasthttp.RequestCtx, key str
 	}
 
 	var response T
-	data, err := m.serializer.Deserialize(ctx.Response.Body())
+	data, err := m.serializer.Decode(ctx.Response.Body())
 	if err != nil {
 		return
 	}

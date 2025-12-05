@@ -2,30 +2,23 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
-// Options contains serialization options
-type Options[T any] struct {
-	Serializer Serializer[T]
-}
+var (
+	ErrSerialization   = errors.New("serialization error")
+	ErrDeserialization = errors.New("deserialization error")
+)
 
-// CacheOptions contains serialization options
-type CacheOptions[T any] struct {
-	Serializer JsonSerializer[T]
-}
-
-// Serializer provides serialization
 type Serializer[T any] interface {
-	Serialize(T) ([]byte, error)
-	Deserialize([]byte) (T, error)
+	Encode(T) ([]byte, error)
+	Decode([]byte) (T, error)
 }
 
-// JsonSerializer provides default JSON serialization
 type JsonSerializer[T any] struct{}
 
-// Serialize converts a value to JSON bytes
-func (JsonSerializer[T]) Serialize(v T) ([]byte, error) {
+func (JsonSerializer[T]) Encode(v T) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSerialization, err)
@@ -33,8 +26,7 @@ func (JsonSerializer[T]) Serialize(v T) ([]byte, error) {
 	return b, nil
 }
 
-// Deserialize converts JSON bytes to a value
-func (JsonSerializer[T]) Deserialize(data []byte) (T, error) {
+func (JsonSerializer[T]) Decode(data []byte) (T, error) {
 	var v T
 	if err := json.Unmarshal(data, &v); err != nil {
 		return v, fmt.Errorf("%w: %v", ErrDeserialization, err)
@@ -42,28 +34,17 @@ func (JsonSerializer[T]) Deserialize(data []byte) (T, error) {
 	return v, nil
 }
 
-// BinarySerializer provides direct binary serialization for byte slices
-type BinarySerializer struct{}
+type (
+	BinarySerializer = IdentitySerializer[[]byte]
+	StringSerializer = ConvertSerializer[string]
+)
 
-// Serialize returns the bytes as-is
-func (BinarySerializer) Serialize(v []byte) ([]byte, error) {
-	return v, nil
-}
+type IdentitySerializer[T any] struct{}
 
-// Deserialize returns the bytes as-is
-func (BinarySerializer) Deserialize(data []byte) ([]byte, error) {
-	return data, nil
-}
+func (IdentitySerializer[T]) Encode(v T) ([]byte, error)    { return any(v).([]byte), nil }
+func (IdentitySerializer[T]) Decode(data []byte) (T, error) { return any(data).(T), nil }
 
-// StringSerializer provides direct string serialization
-type StringSerializer struct{}
+type ConvertSerializer[T ~string] struct{}
 
-// Serialize converts string to bytes
-func (StringSerializer) Serialize(v string) ([]byte, error) {
-	return []byte(v), nil
-}
-
-// Deserialize converts bytes to string
-func (StringSerializer) Deserialize(data []byte) (string, error) {
-	return string(data), nil
-}
+func (ConvertSerializer[T]) Encode(v T) ([]byte, error)    { return []byte(v), nil }
+func (ConvertSerializer[T]) Decode(data []byte) (T, error) { return T(data), nil }

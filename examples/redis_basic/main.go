@@ -14,7 +14,7 @@ func main() {
 
 	cfg := config.Config{
 		Type:            config.TypeRedis,
-		URL:             "redis://localhost:6379/0",
+		RedisURL:        "redis://localhost:6379/0",
 		TTL:             5 * time.Second,
 		Prefix:          "demo:",
 		PoolSize:        20,
@@ -24,7 +24,7 @@ func main() {
 	}
 
 	// Use ADVANCED cache if you want Stats(), Pipelines, etc.
-	adv, err := cache.NewAdvanced[string](cfg, config.Options[string]{})
+	adv, err := cache.NewAdvanced[string](cfg)
 	if err != nil {
 		panic(err)
 	}

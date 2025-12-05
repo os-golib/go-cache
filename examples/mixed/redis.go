@@ -13,9 +13,9 @@ func redis() {
 	fmt.Println("===== Redis example starting =====")
 	cfg := config.Defaults()
 	cfg.Type = config.TypeRedis
-	cfg.URL = "redis://localhost:6379"
+	cfg.RedisURL = "redis://localhost:6379"
 
-	c, err := cache.NewAdvanced[int](cfg, config.Options[int]{})
+	c, err := cache.NewAdvanced[int](cfg)
 	if err != nil {
 		panic(err)
 	}

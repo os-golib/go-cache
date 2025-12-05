@@ -15,9 +15,9 @@ func myfasthttp() {
 	fmt.Println("===== FastHTTP example starting =====")
 	cfg := config.Defaults()
 	cfg.Type = config.TypeRedis
-	cfg.URL = "redis://localhost:6379"
+	cfg.RedisURL = "redis://localhost:6379"
 
-	ac, err := cache.NewAdvanced[[]byte](cfg, config.Options[[]byte]{})
+	ac, err := cache.NewAdvanced[[]byte](cfg)
 	if err != nil {
 		panic(err)
 	}
@@ -38,7 +38,6 @@ func myfasthttp() {
 		})
 
 	handler := func(ctx *fasthttp.RequestCtx) {
-		ctx.Response.Header.Set("Server", "SmartCyber-Server")
 		ctx.SetContentType("text/plain")
 		ctx.SetStatusCode(200)
 		ctx.Response.SetBodyString("Hello, cached world!")

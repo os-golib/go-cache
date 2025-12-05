@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/os-golib/go-cache/config"
+	"github.com/os-golib/go-cache/internal/base"
 	"github.com/os-golib/go-cache/internal/interfaces"
 )
 
@@ -47,7 +47,7 @@ func (l *LockManager) fallbackAcquire(ctx context.Context, key string, ttl time.
 	// Try to set the lock key
 	err := l.cache.Set(ctx, lockKey, "1", ttl)
 	if err != nil {
-		return false, config.NewError("lock acquire", err, key)
+		return false, base.NewError("lock acquire", err, key)
 	}
 
 	// For fallback, we assume success since we don't have atomic SETNX
@@ -61,7 +61,7 @@ func (l *LockManager) fallbackRelease(ctx context.Context, key string) error {
 
 	err := l.cache.Delete(ctx, lockKey)
 	if err != nil {
-		return config.NewError("lock release", err, key)
+		return base.NewError("lock release", err, key)
 	}
 
 	return nil
@@ -79,7 +79,7 @@ func (l *LockManager) WithLock(
 		return err
 	}
 	if !acquired {
-		return config.ErrLockAcquisition
+		return base.ErrLockAcquisition
 	}
 
 	defer func() {
@@ -121,7 +121,7 @@ func (l *LockManager) AcquireWithRetry(ctx context.Context, key string, opts Loc
 			case <-time.After(opts.RetryDelay):
 				continue
 			case <-ctx.Done():
-				return false, config.ErrTimeout
+				return false, base.ErrTimeout
 			}
 		}
 	}

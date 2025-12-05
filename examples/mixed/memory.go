@@ -15,7 +15,7 @@ func memory() {
 	cfg.Type = config.TypeMemory
 	cfg.MaxSize = 100 // Limit to 100 items
 
-	c, err := cache.NewAdvanced[string](cfg, config.Options[string]{})
+	c, err := cache.NewAdvanced[string](cfg)
 	if err != nil {
 		panic(err)
 	}

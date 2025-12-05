@@ -14,7 +14,7 @@ func advanced() {
 	cfg := config.Defaults()
 	cfg.Type = config.TypeMemory
 
-	ac, err := cache.NewAdvanced[string](cfg, config.Options[string]{})
+	ac, err := cache.NewAdvanced[string](cfg)
 	if err != nil {
 		panic(err)
 	}

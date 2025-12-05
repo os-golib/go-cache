@@ -3,9 +3,11 @@ package cache
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/os-golib/go-cache/config"
 	"github.com/os-golib/go-cache/internal/advanced"
+	"github.com/os-golib/go-cache/internal/base"
 	"github.com/os-golib/go-cache/internal/interfaces"
 	"github.com/os-golib/go-cache/memory"
 	"github.com/os-golib/go-cache/redis"
@@ -13,41 +15,41 @@ import (
 
 // New creates a new cache instance based on configuration
 // This is the main entry point for creating cache instances
-func New[T any](cfg config.Config, opt config.Options[T]) (interfaces.Cache[T], error) {
+func New[T any](cfg config.Config) (interfaces.Cache[T], error) {
 	if err := cfg.Validate(); err != nil {
-		return nil, config.NewError("config validation", err, "")
+		return nil, base.NewError("config validation", err, "")
 	}
 
 	switch cfg.Type {
 	case config.TypeRedis:
-		return redis.NewRedisCache[T](cfg, opt.Serializer)
+		return redis.NewRedisCache[T](cfg)
 	case config.TypeMemory:
 		return memory.NewMemoryCache[T](cfg)
 	default:
-		return nil, config.NewError("factory", config.ErrInvalidConfig, string(cfg.Type))
+		return nil, base.NewError("factory", base.ErrInvalidConfig, string(cfg.Type))
 	}
 }
 
 // NewWithContext creates a new cache instance with context for initialization
-func NewWithContext[T any](ctx context.Context, cfg config.Config, opt config.Options[T]) (interfaces.Cache[T], error) {
+func NewWithContext[T any](ctx context.Context, cfg config.Config) (interfaces.Cache[T], error) {
 	if err := cfg.Validate(); err != nil {
-		return nil, config.NewError("config validation", err, "")
+		return nil, base.NewError("config validation", err, "")
 	}
 
 	switch cfg.Type {
 	case config.TypeRedis:
-		return redis.NewRedisContext[T](ctx, cfg, opt.Serializer)
+		return redis.NewRedisContext[T](ctx, cfg)
 	case config.TypeMemory:
 		return memory.NewMemoryContext[T](ctx, cfg)
 	default:
-		return nil, config.NewError("factory", config.ErrInvalidConfig, string(cfg.Type))
+		return nil, base.NewError("factory", base.ErrInvalidConfig, string(cfg.Type))
 	}
 }
 
 // NewAdvanced creates an advanced cache instance with additional features
 // Advanced cache includes metrics, bulk operations, and distributed locking
-func NewAdvanced[T any](cfg config.Config, opt config.Options[T]) (interfaces.AdvancedCache[T], error) {
-	Cache, err := New[T](cfg, opt)
+func NewAdvanced[T any](cfg config.Config) (interfaces.AdvancedCache[T], error) {
+	Cache, err := New[T](cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base cache: %w", err)
 	}
@@ -55,8 +57,8 @@ func NewAdvanced[T any](cfg config.Config, opt config.Options[T]) (interfaces.Ad
 }
 
 // NewAdvancedWithContext creates an advanced cache instance with context
-func NewAdvancedWithContext[T any](ctx context.Context, cfg config.Config, opt config.Options[T]) (interfaces.AdvancedCache[T], error) {
-	Cache, err := NewWithContext[T](ctx, cfg, opt)
+func NewAdvancedWithContext[T any](ctx context.Context, cfg config.Config) (interfaces.AdvancedCache[T], error) {
+	Cache, err := NewWithContext[T](ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base cache: %w", err)
 	}
@@ -66,38 +68,27 @@ func NewAdvancedWithContext[T any](ctx context.Context, cfg config.Config, opt c
 // NewMemory creates a memory cache with default configuration
 // Convenience function for quick memory cache setup
 func NewMemory[T any]() (interfaces.Cache[T], error) {
-	cfg := config.MemoryConfig()
-	return New[T](cfg, config.Options[T]{})
+	cfg, _ := config.NewBuilder(config.TypeMemory).WithMemoryConfig(10000, time.Minute).Build()
+	return New[T](cfg)
 }
 
 // NewRedis creates a Redis cache with the provided URL
 // Convenience function for quick Redis cache setup
 func NewRedis[T any](url string) (interfaces.Cache[T], error) {
-	cfg := config.RedisConfig(url)
-	return New[T](cfg, config.Options[T]{})
+	cfg, _ := config.NewBuilder(config.TypeRedis).WithRedisConfig(url, 10).Build()
+	return New[T](cfg)
 }
 
 // NewMemoryAdvanced creates an advanced memory cache
 func NewMemoryAdvanced[T any]() (interfaces.AdvancedCache[T], error) {
-	cfg := config.MemoryConfig()
-	return NewAdvanced[T](cfg, config.Options[T]{})
+	cfg, _ := config.NewBuilder(config.TypeMemory).WithMemoryConfig(10000, time.Minute).Build()
+	return NewAdvanced[T](cfg)
 }
 
 // NewRedisAdvanced creates an advanced Redis cache
 func NewRedisAdvanced[T any](url string) (interfaces.AdvancedCache[T], error) {
-	cfg := config.RedisConfig(url)
-	return NewAdvanced[T](cfg, config.Options[T]{})
-}
-
-// NewWithSerializer creates a cache with custom serialization
-// Useful for complex types that require custom marshaling
-func NewWithSerializer[T any](cfg config.Config, serializer config.Serializer[T]) (interfaces.Cache[T], error) {
-	return New[T](cfg, config.Options[T]{Serializer: serializer})
-}
-
-// NewAdvancedWithSerializer creates an advanced cache with custom serialization
-func NewAdvancedWithSerializer[T any](cfg config.Config, serializer config.Serializer[T]) (interfaces.AdvancedCache[T], error) {
-	return NewAdvanced[T](cfg, config.Options[T]{Serializer: serializer})
+	cfg, _ := config.NewBuilder(config.TypeRedis).WithRedisConfig(url, 10).Build()
+	return NewAdvanced[T](cfg)
 }
 
 // Must is a helper that wraps a call to a function returning (Cache, error)

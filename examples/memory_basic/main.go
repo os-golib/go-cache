@@ -20,7 +20,7 @@ func main() {
 		CleanupInterval: 10 * time.Second,
 	}
 
-	c, err := cache.NewAdvanced[string](cfg, config.Options[string]{})
+	c, err := cache.NewAdvanced[string](cfg)
 	if err != nil {
 		panic(err)
 	}

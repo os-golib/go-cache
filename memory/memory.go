@@ -22,17 +22,13 @@ type memoryItem[T any] struct {
 
 // memoryCache implements an in-memory LRU cache
 type memoryCache[T any] struct {
-	base.Base
-	Cache           *base.Cache
-	items           map[string]*list.Element
-	lruList         *list.List
-	mu              sync.RWMutex
-	stopCh          chan struct{}
-	capacity        int
-	cleanupInterval time.Duration
-	evictionPolicy  string
-	_len            int64
-	startTime       time.Time
+	*base.Base
+	items    map[string]*list.Element
+	lruList  *list.List
+	mu       sync.RWMutex
+	stopCh   chan struct{}
+	capacity int
+	len      int64
 }
 
 // NewMemoryCache creates a new memory cache instance
@@ -40,172 +36,213 @@ func NewMemoryCache[T any](cfg config.Config) (*memoryCache[T], error) {
 	return NewMemoryContext[T](context.Background(), cfg)
 }
 
-// NewMemoryContext creates a new memory cache instance using context for lifecycle control.
+// NewMemoryContext creates a new memory cache with context for lifecycle control
 func NewMemoryContext[T any](ctx context.Context, cfg config.Config) (*memoryCache[T], error) {
 	if cfg.MaxSize > 0 && cfg.EvictionPolicy != "" && cfg.EvictionPolicy != "lru" {
-		return nil, config.ErrInvalidConfig
+		return nil, base.ErrInvalidConfig
 	}
 
 	mc := &memoryCache[T]{
-		Base:            base.Base{Cfg: cfg},
-		Cache:           base.NewCache(),
-		items:           make(map[string]*list.Element),
-		lruList:         list.New(),
-		stopCh:          make(chan struct{}),
-		capacity:        cfg.MaxSize,
-		cleanupInterval: cfg.CleanupInterval,
-		evictionPolicy:  cfg.EvictionPolicy,
-		startTime:       time.Now(),
+		Base:     base.NewBase(cfg),
+		items:    make(map[string]*list.Element),
+		lruList:  list.New(),
+		stopCh:   make(chan struct{}),
+		capacity: cfg.MaxSize,
 	}
 
 	// Run cleanup loop if interval > 0
-	if mc.cleanupInterval > 0 {
-		go mc.startCleanup(ctx)
+	if cfg.CleanupInterval > 0 {
+		go mc.startCleanup(ctx, cfg.CleanupInterval)
 	}
 
 	return mc, nil
 }
 
+// Unified operation wrapper with metrics and locking
+func (c *memoryCache[T]) execute(ctx context.Context, op string, itemCount int, fn func() error) error {
+	start := time.Now()
+	defer func() {
+		c.RecordOperation(op, time.Since(start), itemCount)
+	}()
+
+	if err := c.CheckContext(ctx); err != nil {
+		return err
+	}
+
+	if err := fn(); err != nil {
+		c.RecordError(op)
+		return err
+	}
+	return nil
+}
+
+// isExpired checks if an item has expired
+func (c *memoryCache[T]) isExpired(item *memoryItem[T]) bool {
+	return !item.expiration.IsZero() && time.Now().After(item.expiration)
+}
+
+// removeElement removes an element from the list and map (must hold write lock)
+func (c *memoryCache[T]) removeElement(elem *list.Element) {
+	c.lruList.Remove(elem)
+	item := elem.Value.(*memoryItem[T])
+	delete(c.items, item.key)
+	atomic.AddInt64(&c.len, -1)
+}
+
+// evict removes the least recently used item (must hold write lock)
+func (c *memoryCache[T]) evict() {
+	if elem := c.lruList.Back(); elem != nil {
+		c.removeElement(elem)
+	}
+}
+
 // Get retrieves a value from the cache
 func (c *memoryCache[T]) Get(ctx context.Context, key string) (T, error) {
-	start := time.Now()
-	defer func() { c.Cache.RecordOperation("get", time.Since(start), 1) }()
+	var val T
 
-	var zero T
-	if err := c.CheckContext(ctx); err != nil {
-		return zero, err
-	}
-	if err := c.ValidateKey(key); err != nil {
-		return zero, err
-	}
-	fullKey := c.FullKey(key)
+	err := c.execute(ctx, "get", 1, func() error {
+		if err := c.ValidateKey(key); err != nil {
+			return err
+		}
 
-	c.mu.RLock()
-	elem, ok := c.items[fullKey]
-	if !ok {
+		fullKey := c.FullKey(key)
+
+		// Try read lock first
+		c.mu.RLock()
+		elem, ok := c.items[fullKey]
+		if !ok {
+			c.mu.RUnlock()
+			c.RecordMiss("get", 1)
+			return base.ErrCacheMiss
+		}
+
+		item := elem.Value.(*memoryItem[T])
+
+		// Check expiration
+		if c.isExpired(item) {
+			c.mu.RUnlock()
+
+			// Upgrade to write lock to remove
+			c.mu.Lock()
+			c.removeElement(elem)
+			c.mu.Unlock()
+
+			c.RecordMiss("get", 1)
+			return base.ErrCacheMiss
+		}
 		c.mu.RUnlock()
-		c.Cache.RecordMiss("get", 1)
-		return zero, config.ErrCacheMiss
-	}
-	item := elem.Value.(*memoryItem[T])
-	if !item.expiration.IsZero() && time.Now().After(item.expiration) {
-		c.mu.RUnlock()
+
+		// Promote to front for LRU (needs write lock)
 		c.mu.Lock()
-		c.removeElement(elem)
-		atomic.AddInt64(&c._len, -1)
+		c.lruList.MoveToFront(elem)
 		c.mu.Unlock()
-		c.Cache.RecordMiss("get", 1)
-		return zero, config.ErrCacheMiss
-	}
-	c.mu.RUnlock()
 
-	// Promote to front for LRU
-	c.mu.Lock()
-	c.lruList.MoveToFront(elem)
-	c.mu.Unlock()
+		val = item.value
+		c.RecordHit("get", 1)
+		return nil
+	})
 
-	c.Cache.RecordHit("get", 1)
-	return item.value, nil
+	return val, err
 }
 
 // Set stores a value in the cache
 func (c *memoryCache[T]) Set(ctx context.Context, key string, value T, ttl time.Duration) error {
-	start := time.Now()
-	defer func() { c.Cache.RecordOperation("set", time.Since(start), 1) }()
+	return c.execute(ctx, "set", 1, func() error {
+		if err := c.ValidateKey(key); err != nil {
+			return err
+		}
 
-	if err := c.CheckContext(ctx); err != nil {
-		return err
-	}
-	if err := c.ValidateKey(key); err != nil {
-		return err
-	}
-	fullKey := c.FullKey(key)
-	effectiveTTL := c.TTL(ttl)
+		fullKey := c.FullKey(key)
+		effectiveTTL := c.TTL(ttl)
 
-	var expiration time.Time
-	if effectiveTTL > 0 {
-		expiration = time.Now().Add(effectiveTTL)
-	}
+		var expiration time.Time
+		if effectiveTTL > 0 {
+			expiration = time.Now().Add(effectiveTTL)
+		}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+		c.mu.Lock()
+		defer c.mu.Unlock()
 
-	if elem, ok := c.items[fullKey]; ok {
-		item := elem.Value.(*memoryItem[T])
-		item.value = value
-		item.expiration = expiration
-		c.lruList.MoveToFront(elem)
+		// Update existing item
+		if elem, ok := c.items[fullKey]; ok {
+			item := elem.Value.(*memoryItem[T])
+			item.value = value
+			item.expiration = expiration
+			c.lruList.MoveToFront(elem)
+			return nil
+		}
+
+		// Evict if at capacity
+		if c.capacity > 0 && int(atomic.LoadInt64(&c.len)) >= c.capacity {
+			c.evict()
+		}
+
+		// Add new item
+		item := &memoryItem[T]{
+			key:        fullKey,
+			value:      value,
+			expiration: expiration,
+		}
+		elem := c.lruList.PushFront(item)
+		c.items[fullKey] = elem
+		atomic.AddInt64(&c.len, 1)
+
 		return nil
-	}
-
-	// Eviction if at capacity
-	if c.capacity > 0 && int(atomic.LoadInt64(&c._len)) >= c.capacity {
-		c.evict()
-	}
-
-	it := &memoryItem[T]{
-		key:        fullKey,
-		value:      value,
-		expiration: expiration,
-	}
-	elem := c.lruList.PushFront(it)
-	c.items[fullKey] = elem
-	atomic.AddInt64(&c._len, 1)
-	return nil
+	})
 }
 
 // Delete removes keys from the cache
 func (c *memoryCache[T]) Delete(ctx context.Context, keys ...string) error {
-	start := time.Now()
-	defer func() { c.Cache.RecordOperation("delete", time.Since(start), len(keys)) }()
-
 	if len(keys) == 0 {
 		return nil
 	}
-	if err := c.CheckContext(ctx); err != nil {
-		return err
-	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, k := range keys {
-		fk := c.FullKey(k)
-		if elem, ok := c.items[fk]; ok {
-			c.removeElement(elem)
-			delete(c.items, fk)
-			atomic.AddInt64(&c._len, -1)
+	return c.execute(ctx, "delete", len(keys), func() error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		for _, k := range keys {
+			fk := c.FullKey(k)
+			if elem, ok := c.items[fk]; ok {
+				c.removeElement(elem)
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // Exists checks if a key exists in the cache
 func (c *memoryCache[T]) Exists(ctx context.Context, key string) (bool, error) {
-	start := time.Now()
-	defer func() { c.Cache.RecordOperation("exists", time.Since(start), 1) }()
+	var exists bool
 
-	if err := c.CheckContext(ctx); err != nil {
-		return false, err
-	}
-	if err := c.ValidateKey(key); err != nil {
-		return false, err
-	}
-	fk := c.FullKey(key)
+	err := c.execute(ctx, "exists", 1, func() error {
+		if err := c.ValidateKey(key); err != nil {
+			return err
+		}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	elem, ok := c.items[fk]
-	if !ok {
-		return false, nil
-	}
-	item := elem.Value.(*memoryItem[T])
-	if !item.expiration.IsZero() && time.Now().After(item.expiration) {
-		c.removeElement(elem)
-		delete(c.items, fk)
-		atomic.AddInt64(&c._len, -1)
-		return false, nil
-	}
-	return true, nil
+		fk := c.FullKey(key)
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		elem, ok := c.items[fk]
+		if !ok {
+			exists = false
+			return nil
+		}
+
+		item := elem.Value.(*memoryItem[T])
+		if c.isExpired(item) {
+			c.removeElement(elem)
+			exists = false
+			return nil
+		}
+
+		exists = true
+		return nil
+	})
+
+	return exists, err
 }
 
 // Close stops the cleanup goroutine
@@ -221,18 +258,15 @@ func (c *memoryCache[T]) Ping(ctx context.Context) error {
 
 // Clear removes all items from the cache
 func (c *memoryCache[T]) Clear(ctx context.Context) error {
-	start := time.Now()
-	defer func() { c.Cache.RecordOperation("clear", time.Since(start), 1) }()
+	return c.execute(ctx, "clear", 1, func() error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 
-	if err := c.CheckContext(ctx); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.items = make(map[string]*list.Element)
-	c.lruList.Init()
-	atomic.StoreInt64(&c._len, 0)
-	return nil
+		c.items = make(map[string]*list.Element)
+		c.lruList.Init()
+		atomic.StoreInt64(&c.len, 0)
+		return nil
+	})
 }
 
 // Len returns the number of items in the cache
@@ -240,79 +274,66 @@ func (c *memoryCache[T]) Len(ctx context.Context) (int, error) {
 	if err := c.CheckContext(ctx); err != nil {
 		return 0, err
 	}
-	return int(atomic.LoadInt64(&c._len)), nil
+	return int(atomic.LoadInt64(&c.len)), nil
 }
 
 // DeleteByPrefix removes all keys with the given prefix
 func (c *memoryCache[T]) DeleteByPrefix(ctx context.Context, prefix string) (int64, error) {
-	start := time.Now()
-	defer func() {
-		c.Cache.RecordOperation("delete_by_prefix", time.Since(start), 1)
-	}()
-
-	if err := c.CheckContext(ctx); err != nil {
-		return 0, err
-	}
-	fullPref := c.FullKey(prefix)
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	var deleted int64
-	for k, elem := range c.items {
-		if strings.HasPrefix(k, fullPref) {
-			c.removeElement(elem)
-			delete(c.items, k)
-			atomic.AddInt64(&c._len, -1)
-			deleted++
+
+	err := c.execute(ctx, "delete_by_prefix", 1, func() error {
+		fullPrefix := c.FullKey(prefix)
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		for k, elem := range c.items {
+			if strings.HasPrefix(k, fullPrefix) {
+				c.removeElement(elem)
+				deleted++
+			}
 		}
-	}
-	return deleted, nil
+		return nil
+	})
+
+	return deleted, err
 }
 
 // Stats returns cache statistics
 func (c *memoryCache[T]) Stats(ctx context.Context) metrics.CacheStats {
-	// Get number of cached keys
-	items, err := c.Len(ctx)
-	items64 := int64(0)
-	if err == nil && items >= 0 {
-		items64 = int64(items)
-	}
+	items, _ := c.Len(ctx)
 
-	// Collect hits & misses from metrics snapshot
-	snapshot := c.Cache.Metrics().Snapshot()
+	snapshot := c.Metrics.Snapshot()
 	var hits, misses int64
+
 	for _, stat := range snapshot {
-		if stat.Hits > 0 {
-			hits += stat.Hits
-		}
-		if stat.Misses > 0 {
-			misses += stat.Misses
-		}
+		hits += stat.Hits
+		misses += stat.Misses
 	}
 
 	return metrics.CacheStats{
 		Backend:         "memory",
-		Items:           items64,
+		Items:           int64(items),
 		Hits:            hits,
 		Misses:          misses,
 		HitRate:         metrics.CalculateHitRate(hits, misses),
-		Uptime:          c.Cache.Uptime(),
+		Uptime:          c.Uptime(),
 		RefreshTTLOnHit: c.Cfg.RefreshTTLOnHit,
 	}
 }
 
-// startCleanup starts the background cleanup goroutine
-func (c *memoryCache[T]) startCleanup(ctx context.Context) {
-	ticker := time.NewTicker(c.cleanupInterval)
+// startCleanup runs the background cleanup goroutine
+func (c *memoryCache[T]) startCleanup(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			c.deleteExpired()
-		case <-ctx.Done(): // external shutdown
+		case <-ctx.Done():
 			return
-		case <-c.stopCh: // internal shutdown
+		case <-c.stopCh:
 			return
 		}
 	}
@@ -322,26 +343,12 @@ func (c *memoryCache[T]) startCleanup(ctx context.Context) {
 func (c *memoryCache[T]) deleteExpired() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	now := time.Now()
 	for _, elem := range c.items {
 		item := elem.Value.(*memoryItem[T])
-		if !item.expiration.IsZero() && time.Now().After(item.expiration) {
+		if !item.expiration.IsZero() && now.After(item.expiration) {
 			c.removeElement(elem)
-			atomic.AddInt64(&c._len, -1)
 		}
 	}
-}
-
-// evict removes the least recently used item
-func (c *memoryCache[T]) evict() {
-	if e := c.lruList.Back(); e != nil {
-		c.removeElement(e)
-		atomic.AddInt64(&c._len, -1)
-	}
-}
-
-// removeElement removes an element from the list and map
-func (c *memoryCache[T]) removeElement(elem *list.Element) {
-	c.lruList.Remove(elem)
-	item := elem.Value.(*memoryItem[T])
-	delete(c.items, item.key)
 }

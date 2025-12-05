@@ -30,7 +30,7 @@ func yaml() {
 
 	// fmt.Printf("Loaded cache config: %+v\n", cfg)
 
-	ac, err := cache.NewAdvanced[User](cfg, config.Options[User]{})
+	ac, err := cache.NewAdvanced[User](cfg)
 	if err != nil {
 		panic(err)
 	}

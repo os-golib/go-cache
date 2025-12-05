@@ -27,7 +27,7 @@ func mygorm() {
 	cfg := config.Defaults()
 	cfg.Type = config.TypeMemory
 
-	advancedCache, err := cache.NewAdvanced[User](cfg, config.Options[User]{})
+	advancedCache, err := cache.NewAdvanced[User](cfg)
 	if err != nil {
 		panic(err)
 	}

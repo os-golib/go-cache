@@ -7,10 +7,9 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	
+
 	"github.com/os-golib/go-cache/internal/interfaces"
 	"github.com/os-golib/go-cache/internal/metrics"
-
 )
 
 // GORMCache provides GORM integration for caching database entities
