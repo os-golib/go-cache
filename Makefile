@@ -1,4 +1,5 @@
 # Makefile for managing Docker Compose stack and development tasks
+version: 1.2.0
 
 # Default environment file
 ENV_FILE ?= .env
