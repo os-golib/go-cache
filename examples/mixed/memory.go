@@ -11,9 +11,8 @@ import (
 
 func memory() {
 	fmt.Println("===== Memory example starting =====")
-	cfg := config.Defaults()
-	cfg.Type = config.TypeMemory
-	cfg.MaxSize = 100 // Limit to 100 items
+
+	cfg, _ := config.NewBuilder(config.TypeMemory).WithMemoryConfig(100, time.Minute).Build()
 
 	c, err := cache.NewAdvanced[string](cfg)
 	if err != nil {

@@ -12,13 +12,15 @@ import (
 func main() {
 	ctx := context.Background()
 
-	cfg := config.Config{
-		Type:            config.TypeMemory,
-		TTL:             5 * time.Second,
-		Prefix:          "demo:",
-		MaxSize:         100,
-		CleanupInterval: 10 * time.Second,
-	}
+	cfg, _ := config.NewBuilder(config.TypeMemory).WithMemoryConfig(100, time.Minute).Build()
+
+	// cfg := config.Config{
+	// 	Type:            config.TypeMemory,
+	// 	TTL:             5 * time.Second,
+	// 	Prefix:          "demo:",
+	// 	MaxSize:         100,
+	// 	CleanupInterval: 10 * time.Second,
+	// }
 
 	c, err := cache.NewAdvanced[string](cfg)
 	if err != nil {

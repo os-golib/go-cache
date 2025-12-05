@@ -11,8 +11,8 @@ import (
 
 func advanced() {
 	fmt.Println("===== Advanced example starting =====")
-	cfg := config.Defaults()
-	cfg.Type = config.TypeMemory
+
+	cfg, _ := config.NewBuilder(config.TypeMemory).WithMemoryConfig(10000, time.Minute).Build()
 
 	ac, err := cache.NewAdvanced[string](cfg)
 	if err != nil {

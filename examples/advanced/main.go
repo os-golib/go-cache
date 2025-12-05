@@ -12,16 +12,18 @@ import (
 func main() {
 	ctx := context.Background()
 
-	cfg := config.Config{
-		Type:            config.TypeRedis,
-		RedisURL:        "redis://localhost:6379/0",
-		TTL:             10 * time.Second,
-		Prefix:          "adv:",
-		PoolSize:        10,
-		MinIdleConn:     2,
-		MaxRetries:      2,
-		RefreshTTLOnHit: true,
-	}
+	cfg, _ := config.NewBuilder(config.TypeMemory).WithMemoryConfig(10000, time.Minute).Build()
+
+	// cfg := config.Config{
+	// 	Type:            config.TypeRedis,
+	// 	RedisURL:        "redis://localhost:6379/0",
+	// 	TTL:             10 * time.Second,
+	// 	Prefix:          "adv:",
+	// 	PoolSize:        10,
+	// 	MinIdleConn:     2,
+	// 	MaxRetries:      2,
+	// 	RefreshTTLOnHit: true,
+	// }
 
 	adv, err := cache.NewAdvanced[string](cfg)
 	if err != nil {

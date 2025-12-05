@@ -13,9 +13,8 @@ import (
 
 func myfasthttp() {
 	fmt.Println("===== FastHTTP example starting =====")
-	cfg := config.Defaults()
-	cfg.Type = config.TypeRedis
-	cfg.RedisURL = "redis://localhost:6379"
+	
+	cfg, _ := config.NewBuilder(config.TypeRedis).WithRedisConfig("redis://localhost:6379", 10).Build()
 
 	ac, err := cache.NewAdvanced[[]byte](cfg)
 	if err != nil {

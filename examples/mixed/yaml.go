@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/os-golib/go-cache"
 	"github.com/os-golib/go-cache/config"
@@ -18,17 +17,10 @@ type User struct {
 
 func yaml() {
 	fmt.Println("===== YAML example starting =====")
-	yamlBytes, err := os.ReadFile("redis.yaml")
+	cfg, err := config.LoadFromFile("redis.yaml")
 	if err != nil {
 		panic(err)
 	}
-
-	cfg, err := config.Load(yamlBytes)
-	if err != nil {
-		panic(err)
-	}
-
-	// fmt.Printf("Loaded cache config: %+v\n", cfg)
 
 	ac, err := cache.NewAdvanced[User](cfg)
 	if err != nil {

@@ -3,6 +3,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"strings"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -11,35 +12,19 @@ import (
 	"github.com/os-golib/go-cache/internal/interfaces"
 )
 
-// HTTPCacheMiddleware provides HTTP caching for fasthttp
-type HTTPCacheMiddleware[T any] struct {
-	cache      interfaces.AdvancedCache[T]
-	keyGen     func(*fasthttp.RequestCtx) string
-	shouldSkip func(*fasthttp.RequestCtx) bool
-	ttl        time.Duration
-	serializer config.Serializer[T]
-	timeout    time.Duration
-	opts       HTTPCacheOptions
-}
-
 // HTTPCacheOptions configures HTTP cache behavior
 type HTTPCacheOptions struct {
-	// Timeout for cache operations
-	Timeout time.Duration
-	// SkipMethods HTTP methods to skip caching for
-	SkipMethods []string
-	// CacheableStatuses HTTP status codes to cache
+	Timeout           time.Duration
+	SkipMethods       []string
 	CacheableStatuses []int
-	// VaryHeaders headers that affect cache key
-	VaryHeaders []string
-	// BypassHeader header that forces cache bypass
-	BypassHeader string
+	VaryHeaders       []string
+	BypassHeader      string
 }
 
-// DefaultHTTPCacheOptions returns default HTTP cache options
+// DefaultHTTPCacheOptions returns default options
 func DefaultHTTPCacheOptions() HTTPCacheOptions {
 	return HTTPCacheOptions{
-		Timeout:           3 * time.Second,
+		Timeout:           DefaultTimeout,
 		SkipMethods:       []string{"POST", "PUT", "PATCH", "DELETE"},
 		CacheableStatuses: []int{200, 203, 204, 206, 300, 301, 308, 404, 405, 410, 414, 501},
 		VaryHeaders:       []string{"Accept", "Accept-Encoding", "Authorization"},
@@ -47,9 +32,19 @@ func DefaultHTTPCacheOptions() HTTPCacheOptions {
 	}
 }
 
+// HTTPCacheMiddleware provides HTTP caching
+type HTTPCacheMiddleware[T any] struct {
+	cache      interfaces.AdvancedCache[T]
+	serializer config.Serializer[T]
+	ttl        time.Duration
+	opts       HTTPCacheOptions
+	keyGen     func(*fasthttp.RequestCtx) string
+	shouldSkip func(*fasthttp.RequestCtx) bool
+}
+
 // NewHTTPCache creates a new HTTP cache middleware
 func NewHTTPCache[T any](
-	acache interfaces.AdvancedCache[T],
+	cache interfaces.AdvancedCache[T],
 	ttl time.Duration,
 	opts ...HTTPCacheOptions,
 ) *HTTPCacheMiddleware[T] {
@@ -58,60 +53,20 @@ func NewHTTPCache[T any](
 		options = opts[0]
 	}
 
-	skipMethods := make(map[string]bool)
-	for _, method := range options.SkipMethods {
-		skipMethods[method] = true
-	}
-
-	cacheableStatuses := make(map[int]bool)
-	for _, status := range options.CacheableStatuses {
-		cacheableStatuses[status] = true
-	}
-
-	return &HTTPCacheMiddleware[T]{
-		cache:      acache,
+	m := &HTTPCacheMiddleware[T]{
+		cache:      cache,
 		ttl:        ttl,
-		timeout:    options.Timeout,
-		serializer: &config.JsonSerializer[T]{},
-		keyGen:     defaultKeyGenerator(options.VaryHeaders),
-		shouldSkip: defaultSkipChecker(skipMethods, cacheableStatuses, options.BypassHeader),
 		opts:       options,
+		serializer: &config.JsonSerializer[T]{},
 	}
+
+	m.keyGen = m.defaultKeyGenerator()
+	m.shouldSkip = m.defaultSkipChecker()
+
+	return m
 }
 
-// Handler returns the fasthttp request handler
-func (m *HTTPCacheMiddleware[T]) Handler(next fasthttp.RequestHandler) fasthttp.RequestHandler {
-	return func(ctx *fasthttp.RequestCtx) {
-		// Check if we should skip caching for this request
-		if m.shouldSkip(ctx) {
-			next(ctx)
-			return
-		}
-
-		ctx.Response.Header.Set("Server", "sws")
-
-		// Generate cache key
-		key := m.keyGen(ctx)
-
-		// Try to get from cache with timeout
-		cctx, cancel := context.WithTimeout(context.Background(), m.timeout)
-		defer cancel()
-
-		if cached, err := m.cache.Get(cctx, key); err == nil {
-			m.serveFromCache(ctx, cached)
-			return
-		}
-
-		// Cache miss - execute the handler
-		m.serveMiss(ctx)
-		next(ctx)
-
-		// Cache the response if appropriate
-		m.cacheResponse(ctx, key)
-	}
-}
-
-// WithKeyGenerator sets a custom key generator
+// Fluent configuration methods
 func (m *HTTPCacheMiddleware[T]) WithKeyGenerator(fn func(*fasthttp.RequestCtx) string) *HTTPCacheMiddleware[T] {
 	if fn != nil {
 		m.keyGen = fn
@@ -119,7 +74,6 @@ func (m *HTTPCacheMiddleware[T]) WithKeyGenerator(fn func(*fasthttp.RequestCtx) 
 	return m
 }
 
-// WithSkipCondition sets a custom skip condition
 func (m *HTTPCacheMiddleware[T]) WithSkipCondition(fn func(*fasthttp.RequestCtx) bool) *HTTPCacheMiddleware[T] {
 	if fn != nil {
 		m.shouldSkip = fn
@@ -127,7 +81,6 @@ func (m *HTTPCacheMiddleware[T]) WithSkipCondition(fn func(*fasthttp.RequestCtx)
 	return m
 }
 
-// WithSerializer sets a custom serializer
 func (m *HTTPCacheMiddleware[T]) WithSerializer(serializer config.Serializer[T]) *HTTPCacheMiddleware[T] {
 	if serializer != nil {
 		m.serializer = serializer
@@ -135,70 +88,91 @@ func (m *HTTPCacheMiddleware[T]) WithSerializer(serializer config.Serializer[T])
 	return m
 }
 
-// WithTimeout sets a custom timeout
 func (m *HTTPCacheMiddleware[T]) WithTimeout(timeout time.Duration) *HTTPCacheMiddleware[T] {
 	if timeout > 0 {
-		m.timeout = timeout
+		m.opts.Timeout = timeout
 	}
 	return m
 }
 
-// ========== PRIVATE METHODS ==========
+// Handler returns the fasthttp request handler
+func (m *HTTPCacheMiddleware[T]) Handler(next fasthttp.RequestHandler) fasthttp.RequestHandler {
+	return func(ctx *fasthttp.RequestCtx) {
+		if m.shouldSkip(ctx) {
+			next(ctx)
+			return
+		}
+
+		ctx.Response.Header.Set("Server", "sws")
+
+		key := m.keyGen(ctx)
+
+		// Try cache
+		cctx, cancel := context.WithTimeout(context.Background(), m.opts.Timeout)
+		defer cancel()
+
+		if cached, err := m.cache.Get(cctx, key); err == nil {
+			m.serveFromCache(ctx, cached)
+			return
+		}
+
+		// Cache miss
+		ctx.Response.Header.Set("X-Cache", "MISS")
+		next(ctx)
+
+		// Cache response asynchronously
+		if m.isCacheableResponse(ctx) {
+			executeAsync("http_cache_set", func() error {
+				return m.cacheResponse(key, ctx.Response.Body())
+			})
+		}
+	}
+}
 
 // serveFromCache serves a cached response
 func (m *HTTPCacheMiddleware[T]) serveFromCache(ctx *fasthttp.RequestCtx, cached T) {
 	body, err := m.serializer.Encode(cached)
 	if err != nil {
-		// If serialization fails, treat as cache miss and continue
-		m.serveMiss(ctx)
+		ctx.Response.Header.Set("X-Cache", "MISS")
 		return
 	}
 
 	ctx.Response.Header.Set("X-Cache", "HIT")
 	ctx.Response.SetStatusCode(fasthttp.StatusOK)
-	ctx.Response.SetBody(body)
-
-	// Set appropriate content type
 	ctx.Response.Header.SetContentType("application/json; charset=utf-8")
+	ctx.Response.SetBody(body)
 }
 
-// serveMiss indicates a cache miss
-func (m *HTTPCacheMiddleware[T]) serveMiss(ctx *fasthttp.RequestCtx) {
-	ctx.Response.Header.Set("X-Cache", "MISS")
-}
-
-// cacheResponse caches the response if appropriate
-func (m *HTTPCacheMiddleware[T]) cacheResponse(ctx *fasthttp.RequestCtx, key string) {
-	// Only cache successful responses
-	if !m.isCacheableStatus(ctx.Response.StatusCode()) {
-		return
-	}
-	// Don't cache if response indicates no-cache
-	cc := ctx.Response.Header.Peek("Cache-Control")
-	if len(cc) > 0 {
-		if bytes.Contains(cc, []byte("no-cache")) ||
-			bytes.Contains(cc, []byte("no-store")) {
-			return
-		}
-	}
-
-	var response T
-	data, err := m.serializer.Decode(ctx.Response.Body())
+// cacheResponse caches the response
+func (m *HTTPCacheMiddleware[T]) cacheResponse(key string, body []byte) error {
+	response, err := m.serializer.Decode(body)
 	if err != nil {
-		return
+		return err
 	}
-	response = data
 
-	// Cache the response asynchronously to not block the request
-	go safeExec("http_cache_set", func() error {
-		return m.cache.Set(context.Background(), key, response, m.ttl)
-	})
+	return m.cache.Set(context.Background(), key, response, m.ttl)
 }
 
-// isCacheableStatus checks if a status code is cacheable
-func (m *HTTPCacheMiddleware[T]) isCacheableStatus(statusCode int) bool {
+// isCacheableResponse checks if response should be cached
+func (m *HTTPCacheMiddleware[T]) isCacheableResponse(ctx *fasthttp.RequestCtx) bool {
+	// Check status code
+	if !m.isCacheableStatus(ctx.Response.StatusCode()) {
+		return false
+	}
+
+	// Check Cache-Control header
+	cc := ctx.Response.Header.Peek("Cache-Control")
+	if bytes.Contains(cc, []byte("no-cache")) || bytes.Contains(cc, []byte("no-store")) {
+		return false
+	}
+
+	return true
+}
+
+// isCacheableStatus checks if status code is cacheable
+func (m *HTTPCacheMiddleware[T]) isCacheableStatus(status int) bool {
 	for _, code := range m.opts.CacheableStatuses {
-		if code == statusCode {
+		if code == status {
 			return true
 		}
 	}
@@ -206,90 +180,55 @@ func (m *HTTPCacheMiddleware[T]) isCacheableStatus(statusCode int) bool {
 }
 
 // defaultKeyGenerator creates the default cache key generator
-func defaultKeyGenerator(varyHeaders []string) func(*fasthttp.RequestCtx) string {
+func (m *HTTPCacheMiddleware[T]) defaultKeyGenerator() func(*fasthttp.RequestCtx) string {
 	return func(ctx *fasthttp.RequestCtx) string {
-		key := string(ctx.Method()) + ":" + string(ctx.Path())
+		var key strings.Builder
 
-		// Include query string
+		key.WriteString(string(ctx.Method()))
+		key.WriteByte(':')
+		key.WriteString(string(ctx.Path()))
+
 		if query := ctx.QueryArgs().QueryString(); len(query) > 0 {
-			key += "?" + string(query)
+			key.WriteByte('?')
+			key.WriteString(string(query))
 		}
 
-		// Include vary headers
-		for _, header := range varyHeaders {
+		for _, header := range m.opts.VaryHeaders {
 			if value := ctx.Request.Header.Peek(header); len(value) > 0 {
-				key += "|" + header + ":" + string(value)
+				key.WriteByte('|')
+				key.WriteString(header)
+				key.WriteByte(':')
+				key.WriteString(string(value))
 			}
 		}
 
-		return key
+		return key.String()
 	}
 }
 
 // defaultSkipChecker creates the default skip condition checker
-func defaultSkipChecker(skipMethods map[string]bool, cacheableStatuses map[int]bool, bypassHeader string) func(*fasthttp.RequestCtx) bool {
+func (m *HTTPCacheMiddleware[T]) defaultSkipChecker() func(*fasthttp.RequestCtx) bool {
+	skipMethods := make(map[string]bool)
+	for _, method := range m.opts.SkipMethods {
+		skipMethods[method] = true
+	}
+
 	return func(ctx *fasthttp.RequestCtx) bool {
 		// Skip non-cacheable methods
-		if skipMethods[string(ctx.Method())] { // Fixed: Inline string conversion
-			return true
-		}
-		// Skip if bypass header is present
-		if bypassHeader != "" && ctx.Request.Header.Peek(bypassHeader) != nil {
+		if skipMethods[string(ctx.Method())] {
 			return true
 		}
 
-		// If response status is not cacheable → skip caching
-		status := ctx.Response.StatusCode()
-		if !cacheableStatuses[status] {
+		// Skip if bypass header present
+		if m.opts.BypassHeader != "" && ctx.Request.Header.Peek(m.opts.BypassHeader) != nil {
 			return true
 		}
 
-		// Skip if explicitly no-store
-		if cc := ctx.Request.Header.Peek("Cache-Control"); string(cc) == "no-store" {
+		// Skip if no-store in request
+		if cc := ctx.Request.Header.Peek("Cache-Control"); bytes.Contains(cc, []byte("no-store")) {
 			return true
 		}
 
 		return false
-	}
-}
-
-// CacheControl sets Cache-Control headers
-func CacheControl(maxAge time.Duration, public bool) func(fasthttp.RequestHandler) fasthttp.RequestHandler {
-	return func(next fasthttp.RequestHandler) fasthttp.RequestHandler {
-		return func(ctx *fasthttp.RequestCtx) {
-			next(ctx)
-
-			var directive string
-			if public {
-				directive = "public"
-			} else {
-				directive = "private"
-			}
-
-			ctx.Response.Header.Set("Cache-Control",
-				directive+", max-age="+string(rune(maxAge.Seconds())))
-		}
-	}
-}
-
-// ETag generates and validates ETags
-func ETag(next fasthttp.RequestHandler) fasthttp.RequestHandler {
-	return func(ctx *fasthttp.RequestCtx) {
-		next(ctx)
-
-		// Generate ETag from response body
-		body := ctx.Response.Body()
-		if len(body) > 0 {
-			etag := fasthttp.AppendQuotedArg(nil, body)
-			ctx.Response.Header.SetBytesV("ETag", etag)
-
-			// Check If-None-Match
-			if match := ctx.Request.Header.Peek("If-None-Match"); len(match) > 0 {
-				if bytes.Equal(match, etag) {
-					ctx.SetStatusCode(fasthttp.StatusNotModified)
-					ctx.SetBody(nil)
-				}
-			}
-		}
 	}
 }
