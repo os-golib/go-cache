@@ -68,26 +68,38 @@ func NewAdvancedWithContext[T any](ctx context.Context, cfg config.Config) (inte
 // NewMemory creates a memory cache with default configuration
 // Convenience function for quick memory cache setup
 func NewMemory[T any]() (interfaces.Cache[T], error) {
-	cfg, _ := config.NewBuilder(config.TypeMemory).WithMemoryConfig(10000, time.Minute).Build()
+	cfg, err := config.NewBuilder(config.TypeMemory).WithMemoryConfig(10000, time.Minute).Build()
+	if err != nil {
+		return nil, err
+	}
 	return New[T](cfg)
 }
 
 // NewRedis creates a Redis cache with the provided URL
 // Convenience function for quick Redis cache setup
 func NewRedis[T any](url string) (interfaces.Cache[T], error) {
-	cfg, _ := config.NewBuilder(config.TypeRedis).WithRedisConfig(url, 10).Build()
+	cfg, err := config.NewBuilder(config.TypeRedis).WithRedisConfig(url, 10).Build()
+	if err != nil {
+		return nil, err
+	}
 	return New[T](cfg)
 }
 
 // NewMemoryAdvanced creates an advanced memory cache
 func NewMemoryAdvanced[T any]() (interfaces.AdvancedCache[T], error) {
-	cfg, _ := config.NewBuilder(config.TypeMemory).WithMemoryConfig(10000, time.Minute).Build()
+	cfg, err := config.NewBuilder(config.TypeMemory).WithMemoryConfig(10000, time.Minute).Build()
+	if err != nil {
+		return nil, err
+	}
 	return NewAdvanced[T](cfg)
 }
 
 // NewRedisAdvanced creates an advanced Redis cache
 func NewRedisAdvanced[T any](url string) (interfaces.AdvancedCache[T], error) {
-	cfg, _ := config.NewBuilder(config.TypeRedis).WithRedisConfig(url, 10).Build()
+	cfg, err := config.NewBuilder(config.TypeRedis).WithRedisConfig(url, 10).Build()
+	if err != nil {
+		return nil, err
+	}
 	return NewAdvanced[T](cfg)
 }
 
