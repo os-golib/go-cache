@@ -1,0 +1,133 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+  tests: true
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-dirs:
+    - vendor
+    - generated
+    - bin
+    - examples
+
+  exclude-files:
+    - ".*_test\\.go$"
+    - ".*_mock\\.go$"
+    - ".*\\.pb\\.go$"
+    - ".*\\.pb\\.gw\\.go$"
+    - ".*_gen\\.go$"
+
+  exclude:
+    - EXC0011
+    - EXC0012
+    - 'exported (method|function|type|const|var) .* should have comment'
+    - "func name will be used as test\\.Test.* by other packages"
+    - "don't use an underscore in package name"
+
+  exclude-rules:
+    - path: _test\.go
+      linters: [dupl, goconst, gomnd]
+
+    - path: vendor/
+      linters: [all]
+
+    - path: internal/.*
+      text: 'exported.*should have comment'
+      linters: [revive]
+
+linters:
+  disable-all: true
+  enable:
+    - govet
+    - staticcheck
+    - unused
+    - gosimple
+    - errcheck
+    - ineffassign
+    - typecheck
+    - gocyclo
+    - gofmt
+    - goimports
+    - misspell
+    - revive
+    - goconst
+    - gocritic
+    - bodyclose
+    - contextcheck
+    - dupl
+    - gochecknoinits
+    - gocognit
+    - gosec
+    - prealloc
+    - rowserrcheck
+    - sqlclosecheck
+    - whitespace
+    - copyloopvar
+    - varnamelen # we keep it, but whitelist below
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+
+  gocognit:
+    min-complexity: 20
+
+  goimports:
+    local-prefixes: github.com/os-golib/go-cache
+
+  revive:
+    rules:
+      - name: var-naming
+        arguments:
+          - ['ID', 'URL', 'API', 'HTTP', 'JSON', 'SQL']
+
+      - name: exported
+        arguments: [checkPrivateReceivers]
+
+      - name: indent-error-flow
+      - name: error-strings
+      - name: receiver-naming
+      - name: modifies-value-receiver
+      - name: empty-block
+      - name: unused-parameter
+      - name: early-return
+      - name: confusing-results
+
+  gocritic:
+    enabled-tags:
+      - performance
+      - diagnostic
+      - style
+    disabled-checks:
+      - hugeParam
+      - dupImport
+      - paramTypeCombine
+      - appendAssign
+
+  varnamelen:
+    min-name-length: 1
+    ignore-names:
+      - i
+      - j
+      - k
+      - v
+      - t
+
+  gosec:
+    excludes:
+      - G304 # allow unhandled errors
+      - G104 # allow unchecked errors
+      - G601 # allow slice aliasing
+
+output:
+  formats:
+    - format: colored-line-number
+      print-issued-lines: true
+      print-linter-name: true
+
+severity:
+  default: error

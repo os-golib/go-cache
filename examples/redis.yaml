@@ -1,0 +1,13 @@
+type: redis
+ttl: 15m
+prefix: 'cache:'
+
+# Redis-specific
+redis_url: 'redis://localhost:6379/0'
+pool_size: 50
+min_idle_conns: 10
+max_retries: 3
+
+dial_timeout: 5s
+read_timeout: 3s
+write_timeout: 3s

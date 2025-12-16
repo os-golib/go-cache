@@ -1,0 +1,7 @@
+type: memory
+ttl: 10m
+prefix: 'cache:'
+
+cleanup_interval: 1m
+max_size: 10000
+eviction_policy: lru
